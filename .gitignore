@@ -1,0 +1,29 @@
+# Internal docs
+docs/
+
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# User runtime data — NEVER commit these
+.rtk-mcp/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Env
+.env
+.env.*
