@@ -6,6 +6,7 @@ import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { runCommand, runFiltered, formatResult } from "./runner.js";
 import { getSummary, getHistory, getDailyBreakdown } from "./tracking.js";
+import { validateArgs, checkAllowlist, checkPathTraversal } from "./guard.js";
 import {
   detectAndFilter,
   filterGitStatus, filterGitLog, filterGitDiff, filterGitSimple,
@@ -28,6 +29,10 @@ loadConfig();
 
 function tokenEstimate(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+function blocked(reason: string) {
+  return { content: [{ type: "text" as const, text: `blocked: ${reason}` }] };
 }
 
 // ─── Server Setup ───────────────────────────────────────────────────────────
@@ -59,6 +64,12 @@ Returns: Compressed output with token savings stats.`,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const al = checkAllowlist(command);
+    if (!al.allowed) return blocked(`command not in allowlist: '${al.prefix}' — rtk_run only accepts known developer commands`);
+    const firstSpace = command.indexOf(" ");
+    const argsOnly = firstSpace >= 0 ? command.slice(firstSpace + 1) : "";
+    const gv = validateArgs(argsOnly);
+    if (!gv.safe) return blocked(gv.reason!);
     const result = runCommand(command, cwd);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const { filtered, strategy } = detectAndFilter(command, raw);
@@ -97,6 +108,7 @@ Returns: Compressed git output.
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const filterKey = `git ${args}`;
     let cmd = `git ${args}`;
 
@@ -144,6 +156,7 @@ Returns: "PASSED: N tests" or "FAILED: N/M tests" with failure details only.`,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(command, cwd, 120_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterTestOutput(raw);
@@ -173,6 +186,7 @@ Returns: File content, compressed based on mode.`,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ path, cwd, mode }) => {
+    const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!);
     const catCmd = process.platform === "win32" ? `type "${path}"` : `cat "${path}"`;
     const result = runCommand(catCmd, cwd);
     if (result.exitCode !== 0) {
@@ -231,6 +245,7 @@ Returns: Compact directory listing.`,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ path, cwd }) => {
+    const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!);
     const lsCmd = process.platform === "win32" ? `dir "${path}"` : `ls -la "${path}"`;
     const result = runCommand(lsCmd, cwd);
     return { content: [{ type: "text", text: filterLs(result.stdout) }] };
@@ -259,6 +274,7 @@ Returns: Matches grouped by file with counts.`,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ pattern, path, cwd }) => {
+    const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!);
     let result = runCommand(`rg -n --with-filename "${pattern}" "${path}"`, cwd);
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       result = runCommand(`grep -rn "${pattern}" "${path}"`, cwd);
@@ -296,6 +312,7 @@ Returns: "build ok" or grouped errors/warnings.`,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(command, cwd, 120_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterBuildOutput(raw);
@@ -323,6 +340,7 @@ Returns: Deduplicated logs with repeat counts.`,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(command, cwd);
     return { content: [{ type: "text", text: filterLogs(result.stdout) }] };
   }
@@ -349,6 +367,7 @@ Returns: BUILD SUCCESSFUL or errors/warnings only.`,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const gradleCmd = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
     const result = runCommand(`${gradleCmd} ${args}`, cwd, 900_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
@@ -378,6 +397,7 @@ Returns: Compressed ADB output.`,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(`adb ${args}`, cwd, 60_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const { filtered } = detectAndFilter(`adb ${args}`, raw);
@@ -404,6 +424,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`cargo ${command}`, "rtk_cargo", filterCargo, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -427,6 +448,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const cmd = args.trim() ? `pytest ${args}` : "pytest";
     const r = runFiltered(cmd, "rtk_pytest", filterPytest, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
@@ -451,6 +473,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const isTest = /^test/.test(command.trim());
     const filter = isTest ? filterGoTest : filterBuildOutput;
     const r = runFiltered(`go ${command}`, "rtk_go", filter, cwd, 120_000);
@@ -476,6 +499,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`vitest ${args}`, "rtk_vitest", filterVitest, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -499,6 +523,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const cmd = args.trim() ? `npx playwright test ${args}` : "npx playwright test";
     const r = runFiltered(cmd, "rtk_playwright", filterPlaywright, cwd, 300_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
@@ -523,6 +548,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`npx tsc ${args}`, "rtk_tsc", filterTsc, cwd, 60_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -546,6 +572,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(command, "rtk_lint", filterLint, cwd, 60_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -569,6 +596,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`ruff ${args}`, "rtk_ruff", filterRuff, cwd, 60_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -592,6 +620,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`golangci-lint ${args}`, "rtk_golangci", filterGolangci, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -615,6 +644,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`next ${args}`, "rtk_next", filterNext, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -638,6 +668,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`npx prettier ${args}`, "rtk_prettier", filterPrettier, cwd, 60_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -661,6 +692,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`npm ${command}`, "rtk_npm", filterNpm, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -684,6 +716,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`pnpm ${command}`, "rtk_pnpm", filterPnpm, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -707,6 +740,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`pip ${command}`, "rtk_pip", filterPip, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -730,6 +764,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(`docker ${command}`, cwd, 30_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterDocker(raw, command);
@@ -756,6 +791,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(`kubectl ${command}`, cwd, 30_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterKubectl(raw, command);
@@ -782,6 +818,7 @@ Args:
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const result = runCommand(`gh ${command}`, cwd, 30_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterGh(raw, command);
@@ -810,6 +847,7 @@ Args:
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   async ({ url, args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     const curlArgs = args.trim() ? `${args} ${url}` : url;
     const r = runFiltered(`curl -s ${curlArgs}`, "rtk_curl", filterCurl, cwd, 30_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
@@ -834,6 +872,7 @@ Args:
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ path, cwd }) => {
+    const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!);
     const catCmd = process.platform === "win32" ? `type "${path}"` : `cat "${path}"`;
     const result = runCommand(catCmd, cwd);
     if (result.exitCode !== 0) {
@@ -885,6 +924,7 @@ Args:
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ args, cwd }) => {
+    const g = validateArgs(args); if (!g.safe) return blocked(g.reason!);
     // Try native diff first, fall back to git diff --no-index (works on Windows without diff in PATH)
     let diffResult = runCommand(`diff ${args}`, cwd, 30_000);
     if (diffResult.exitCode === 127 || /not recognized|not found/i.test(diffResult.stderr + diffResult.stdout)) {
@@ -915,6 +955,7 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const g = validateArgs(command); if (!g.safe) return blocked(g.reason!);
     const r = runFiltered(`npx prisma ${command}`, "rtk_prisma", filterPrisma, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -940,6 +981,7 @@ Args:
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ pattern, path, cwd }) => {
+    const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!);
     let result = runCommand(`fd "${pattern}" "${path}"`, cwd);
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       const findCmd = process.platform === "win32"
@@ -970,6 +1012,11 @@ Args:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ command, cwd }) => {
+    const al = checkAllowlist(command);
+    if (!al.allowed) return blocked(`command not in allowlist: '${al.prefix}' — rtk_summary only accepts known developer commands`);
+    const firstSpace = command.indexOf(" ");
+    const argsOnly = firstSpace >= 0 ? command.slice(firstSpace + 1) : "";
+    const gv = validateArgs(argsOnly); if (!gv.safe) return blocked(gv.reason!);
     const r = runFiltered(command, "rtk_summary", filterSummary, cwd, 60_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
