@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { runCommand, runFiltered, formatResult } from "./runner.js";
-import { getSummary, getHistory, getDailyBreakdown, recordBlocked } from "./tracking.js";
+import { getSummary, getHistory, getDailyBreakdown, recordBlocked, recordUsage } from "./tracking.js";
 import { validateArgs, checkAllowlist, checkPathTraversal, sanitizeShellLiteral } from "./guard.js";
 import {
   detectAndFilter,
@@ -40,6 +40,10 @@ function blocked(reason: string, rawCmd = "", rtkCmd = "") {
 function resolvePath(p: string, cwd?: string): string {
   if (!cwd || nodePath.isAbsolute(p)) return p;
   return nodePath.resolve(cwd, p);
+}
+
+function track(rawCmd: string, rtkCmd: string, raw: string, filtered: string): void {
+  recordUsage(rawCmd, rtkCmd, raw, filtered);
 }
 
 // ─── Server Setup ───────────────────────────────────────────────────────────
@@ -80,6 +84,7 @@ Returns: Compressed output with token savings stats.`,
     const result = runCommand(command, cwd);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const { filtered, strategy } = detectAndFilter(command, raw);
+    track(command, "rtk_run", raw, filtered);
 
     const rawTokens = tokenEstimate(raw);
     const filteredTokens = tokenEstimate(filtered);
@@ -138,6 +143,7 @@ Returns: Compressed git output.
     }
 
     const { filtered } = detectAndFilter(filterKey, raw);
+    track(`git ${args}`, "rtk_git", raw, filtered);
     const meta = result.exitCode !== 0 ? `[exit: ${result.exitCode}] ` : "";
     return { content: [{ type: "text", text: `${meta}${filtered}` }] };
   }
@@ -167,6 +173,7 @@ Returns: "PASSED: N tests" or "FAILED: N/M tests" with failure details only.`,
     const result = runCommand(command, cwd, 120_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterTestOutput(raw);
+    track(command, "rtk_test", raw, filtered);
     return { content: [{ type: "text", text: result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n${filtered}` : filtered }] };
   }
 );
@@ -229,6 +236,7 @@ Returns: File content, compressed based on mode.`,
       }
     }
 
+    track(path, "rtk_read", raw, output);
     return { content: [{ type: "text", text: output }] };
   }
 );
@@ -257,7 +265,9 @@ Returns: Compact directory listing.`,
     const resolved = resolvePath(path, cwd);
     const lsCmd = process.platform === "win32" ? `dir "${resolved}"` : `ls -la "${resolved}"`;
     const result = runCommand(lsCmd, cwd);
-    return { content: [{ type: "text", text: filterLs(result.stdout) }] };
+    const filtered = filterLs(result.stdout);
+    track(lsCmd, "rtk_ls", result.stdout, filtered);
+    return { content: [{ type: "text", text: filtered }] };
   }
 );
 
@@ -300,7 +310,9 @@ Returns: Matches grouped by file with counts.`,
         result = { ...result, stdout: result.stdout.split("\n").map(l => l.trim() ? `${basename}:${l}` : l).join("\n") };
       }
     }
-    return { content: [{ type: "text", text: filterGrep(result.stdout, pattern) }] };
+    const filtered = filterGrep(result.stdout, pattern);
+    track(pattern, "rtk_grep", result.stdout, filtered);
+    return { content: [{ type: "text", text: filtered }] };
   }
 );
 
@@ -328,6 +340,7 @@ Returns: "build ok" or grouped errors/warnings.`,
     const result = runCommand(command, cwd, 120_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterBuildOutput(raw);
+    track(command, "rtk_build", raw, filtered);
     return { content: [{ type: "text", text: result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n${filtered}` : filtered }] };
   }
 );
@@ -354,7 +367,9 @@ Returns: Deduplicated logs with repeat counts.`,
   async ({ command, cwd }) => {
     const g = validateArgs(command); if (!g.safe) return blocked(g.reason!, command, 'rtk_logs');
     const result = runCommand(command, cwd);
-    return { content: [{ type: "text", text: filterLogs(result.stdout) }] };
+    const filtered = filterLogs(result.stdout);
+    track(command, "rtk_logs", result.stdout, filtered);
+    return { content: [{ type: "text", text: filtered }] };
   }
 );
 
@@ -384,6 +399,7 @@ Returns: BUILD SUCCESSFUL or errors/warnings only.`,
     const result = runCommand(`${gradleCmd} ${args}`, cwd, 900_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const { filtered } = detectAndFilter(`gradlew ${args}`, raw);
+    track(`gradlew ${args}`, "rtk_gradle", raw, filtered);
     const meta = result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n` : "";
     return { content: [{ type: "text", text: `${meta}${filtered}` }] };
   }
@@ -413,6 +429,7 @@ Returns: Compressed ADB output.`,
     const result = runCommand(`adb ${args}`, cwd, 60_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const { filtered } = detectAndFilter(`adb ${args}`, raw);
+    track(`adb ${args}`, "rtk_adb", raw, filtered);
     const meta = result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n` : "";
     return { content: [{ type: "text", text: `${meta}${filtered}` }] };
   }
@@ -780,6 +797,7 @@ Args:
     const result = runCommand(`docker ${command}`, cwd, 30_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterDocker(raw, command);
+    track(`docker ${command}`, "rtk_docker", raw, filtered);
     const meta = result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n` : "";
     return { content: [{ type: "text", text: `${meta}${filtered}` }] };
   }
@@ -807,6 +825,7 @@ Args:
     const result = runCommand(`kubectl ${command}`, cwd, 30_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterKubectl(raw, command);
+    track(`kubectl ${command}`, "rtk_kubectl", raw, filtered);
     const meta = result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n` : "";
     return { content: [{ type: "text", text: `${meta}${filtered}` }] };
   }
@@ -834,6 +853,7 @@ Args:
     const result = runCommand(`gh ${command}`, cwd, 30_000);
     const raw = result.stdout + (result.stderr ? "\n" + result.stderr : "");
     const filtered = filterGh(raw, command);
+    track(`gh ${command}`, "rtk_gh", raw, filtered);
     const meta = result.exitCode !== 0 ? `[exit: ${result.exitCode}]\n` : "";
     return { content: [{ type: "text", text: `${meta}${filtered}` }] };
   }
@@ -891,7 +911,9 @@ Args:
     if (result.exitCode !== 0) {
       return { content: [{ type: "text", text: `Error reading ${path}: ${result.stderr.trim()}` }] };
     }
-    return { content: [{ type: "text", text: filterJson(result.stdout) }] };
+    const filtered = filterJson(result.stdout);
+    track(path, "rtk_json", result.stdout, filtered);
+    return { content: [{ type: "text", text: filtered }] };
   }
 );
 
@@ -915,7 +937,9 @@ Args:
   async ({ filter, cwd }) => {
     const envCmd = process.platform === "win32" ? "set" : "env";
     const result = runCommand(envCmd, cwd);
-    return { content: [{ type: "text", text: filterEnv(result.stdout, filter) }] };
+    const filtered = filterEnv(result.stdout, filter);
+    track(envCmd, "rtk_env", result.stdout, filtered);
+    return { content: [{ type: "text", text: filtered }] };
   }
 );
 
@@ -945,6 +969,7 @@ Args:
     }
     const raw = diffResult.stdout + (diffResult.stderr ? "\n" + diffResult.stderr : "");
     const filtered = filterDiff(raw);
+    track(`diff ${args}`, "rtk_diff", raw, filtered);
     const r = { raw, filtered, exitCode: diffResult.exitCode, tokensBefore: Math.ceil(raw.length / 4), tokensAfter: Math.ceil(filtered.length / 4) };
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
@@ -1003,7 +1028,9 @@ Args:
         : `find "${resolved}" -name "${pattern}"`;
       result = runCommand(findCmd, cwd);
     }
-    return { content: [{ type: "text", text: filterFind(result.stdout) }] };
+    const filtered = filterFind(result.stdout);
+    track(`find ${pattern} ${path}`, "rtk_find", result.stdout, filtered);
+    return { content: [{ type: "text", text: filtered }] };
   }
 );
 
