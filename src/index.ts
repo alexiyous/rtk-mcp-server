@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import nodePath from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -34,6 +35,11 @@ function tokenEstimate(text: string): number {
 function blocked(reason: string, rawCmd = "", rtkCmd = "") {
   recordBlocked(rawCmd, rtkCmd, reason);
   return { content: [{ type: "text" as const, text: `blocked: ${reason}` }] };
+}
+
+function resolvePath(p: string, cwd?: string): string {
+  if (!cwd || nodePath.isAbsolute(p)) return p;
+  return nodePath.resolve(cwd, p);
 }
 
 // ─── Server Setup ───────────────────────────────────────────────────────────
@@ -188,7 +194,8 @@ Returns: File content, compressed based on mode.`,
   },
   async ({ path, cwd, mode }) => {
     const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!, path, 'rtk_read');
-    const catCmd = process.platform === "win32" ? `type "${path}"` : `cat "${path}"`;
+    const resolved = resolvePath(path, cwd);
+    const catCmd = process.platform === "win32" ? `type "${resolved}"` : `cat "${resolved}"`;
     const result = runCommand(catCmd, cwd);
     if (result.exitCode !== 0) {
       return { content: [{ type: "text", text: `Error reading ${path}: ${result.stderr.trim()}` }] };
@@ -247,7 +254,8 @@ Returns: Compact directory listing.`,
   },
   async ({ path, cwd }) => {
     const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!, path, 'rtk_ls');
-    const lsCmd = process.platform === "win32" ? `dir "${path}"` : `ls -la "${path}"`;
+    const resolved = resolvePath(path, cwd);
+    const lsCmd = process.platform === "win32" ? `dir "${resolved}"` : `ls -la "${resolved}"`;
     const result = runCommand(lsCmd, cwd);
     return { content: [{ type: "text", text: filterLs(result.stdout) }] };
   }
@@ -877,7 +885,8 @@ Args:
   },
   async ({ path, cwd }) => {
     const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!, path, 'rtk_json');
-    const catCmd = process.platform === "win32" ? `type "${path}"` : `cat "${path}"`;
+    const resolved = resolvePath(path, cwd);
+    const catCmd = process.platform === "win32" ? `type "${resolved}"` : `cat "${resolved}"`;
     const result = runCommand(catCmd, cwd);
     if (result.exitCode !== 0) {
       return { content: [{ type: "text", text: `Error reading ${path}: ${result.stderr.trim()}` }] };
@@ -986,11 +995,12 @@ Args:
   },
   async ({ pattern, path, cwd }) => {
     const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!, path, 'rtk_find');
-    let result = runCommand(`fd "${pattern}" "${path}"`, cwd);
+    const resolved = resolvePath(path, cwd);
+    let result = runCommand(`fd "${pattern}" "${resolved}"`, cwd);
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       const findCmd = process.platform === "win32"
-        ? `dir /s /b "${path}\\${pattern}"`
-        : `find "${path}" -name "${pattern}"`;
+        ? `dir /s /b "${resolved}\\${pattern}"`
+        : `find "${resolved}" -name "${pattern}"`;
       result = runCommand(findCmd, cwd);
     }
     return { content: [{ type: "text", text: filterFind(result.stdout) }] };
