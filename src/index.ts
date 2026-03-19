@@ -512,7 +512,7 @@ Args:
   },
   async ({ args, cwd }) => {
     const g = validateArgs(args); if (!g.safe) return blocked(g.reason!, args, 'rtk_vitest');
-    const r = runFiltered(`vitest ${args}`, "rtk_vitest", filterVitest, cwd, 120_000);
+    const r = runFiltered(`npx vitest ${args}`, "rtk_vitest", filterVitest, cwd, 120_000);
     return { content: [{ type: "text", text: formatResult(r) }] };
   }
 );
