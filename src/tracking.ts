@@ -128,6 +128,18 @@ export function getHistory(n: number): HistoryRow[] {
   }
 }
 
+export function recordBlocked(rawCmd: string, rtkCmd: string, reason: string): void {
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO history (timestamp, raw_cmd, rtk_cmd, raw_tokens, filtered_tokens, tokens_saved)
+       VALUES (?, ?, ?, 0, 0, 0)`
+    ).run(Date.now(), `[BLOCKED] ${rawCmd} — ${reason}`, rtkCmd);
+  } catch {
+    // Non-fatal
+  }
+}
+
 export function getDailyBreakdown(): DailyRow[] {
   try {
     const db = getDb();
