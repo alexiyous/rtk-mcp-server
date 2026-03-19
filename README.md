@@ -211,9 +211,10 @@ Example attack payloads:
 
 - No authentication — anyone with access to your Claude Desktop can invoke these tools
 - No rate limiting
-- No command allowlisting or denylisting
 - No network isolation
 - No privilege separation — runs as your user
+
+> `rtk_run` and `rtk_summary` are restricted to a hardcoded allowlist of developer commands. Shell metacharacters (`;`, `|`, `>`, `$()`, backticks) are blocked outside quoted strings on all 35 tools. Path traversal (`../`) is blocked on file-path tools (`rtk_read`, `rtk_ls`, `rtk_grep`, `rtk_find`, `rtk_json`). All blocked calls are recorded in the SQLite audit log at `~/.rtk-mcp/history.db`.
 
 ### Recommendations
 
