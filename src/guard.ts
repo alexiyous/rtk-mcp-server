@@ -51,3 +51,72 @@ export function validateArgs(input: string): GuardResult {
 
   return { safe: true };
 }
+
+// ─── rtk_run Allowlist ───────────────────────────────────────────────────────
+
+const ALLOWED_PREFIXES = new Set([
+  // Version control
+  "git",
+  // Node / JS
+  "npm", "npx", "node", "pnpm", "yarn",
+  // TypeScript / linting
+  "tsc", "eslint", "biome", "prettier",
+  // Rust
+  "cargo", "rustc",
+  // Go
+  "go", "golangci-lint",
+  // Python
+  "pytest", "python", "python3", "pip", "pip3", "ruff",
+  // Testing
+  "vitest", "jest", "mocha",
+  // E2E
+  "playwright",
+  // Containers / cloud
+  "docker", "docker-compose", "kubectl", "helm",
+  // GitHub CLI
+  "gh",
+  // Network
+  "curl", "wget",
+  // Android
+  "gradle", "gradlew", "./gradlew",
+  "adb",
+  // ORM
+  "prisma",
+  // Frontend build
+  "next", "vite", "webpack", "esbuild",
+  // Search / file
+  "rg", "grep", "find", "fd",
+  // Basic shell read-only
+  "ls", "dir", "cat", "head", "tail", "echo", "type",
+  // Diff
+  "diff",
+  // Env
+  "env", "printenv",
+]);
+
+export interface AllowlistResult {
+  allowed: boolean;
+  prefix?: string;
+}
+
+export function checkAllowlist(command: string): AllowlistResult {
+  const trimmed = command.trim();
+  if (!trimmed) return { allowed: false, prefix: "" };
+
+  const prefix = trimmed.split(/\s+/)[0];
+  if (ALLOWED_PREFIXES.has(prefix)) return { allowed: true, prefix };
+  return { allowed: false, prefix };
+}
+
+// ─── Path Traversal Guard ────────────────────────────────────────────────────
+
+export function checkPathTraversal(filePath: string): GuardResult {
+  const decoded = decodeURIComponent(filePath).replace(/\\/g, "/");
+  if (decoded.includes("../") || decoded.includes("/..")) {
+    return { safe: false, reason: "path traversal '..' — relative path escapes working directory" };
+  }
+  if (/%2e%2e/i.test(filePath)) {
+    return { safe: false, reason: "path traversal (encoded) — relative path escapes working directory" };
+  }
+  return { safe: true };
+}

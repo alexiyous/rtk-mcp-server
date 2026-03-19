@@ -1,6 +1,6 @@
 // src/guard.test.ts
 import { describe, it, expect } from "vitest";
-import { validateArgs } from "./guard.js";
+import { validateArgs, checkAllowlist, checkPathTraversal } from "./guard.js";
 
 describe("validateArgs — safe inputs", () => {
   it("allows plain args", () => {
@@ -71,5 +71,48 @@ describe("validateArgs — blocked inputs", () => {
     const r = validateArgs("diff <(cat a) <(cat b)");
     expect(r.safe).toBe(false);
     expect(r.reason).toMatch(/process substitution/);
+  });
+});
+
+describe("checkAllowlist", () => {
+  it("allows git", () => expect(checkAllowlist("git status").allowed).toBe(true));
+  it("allows npm run build", () => expect(checkAllowlist("npm run build").allowed).toBe(true));
+  it("allows npx tsc", () => expect(checkAllowlist("npx tsc").allowed).toBe(true));
+  it("allows ./gradlew", () => expect(checkAllowlist("./gradlew assembleDebug").allowed).toBe(true));
+  it("allows rg with args", () => expect(checkAllowlist("rg -n pattern src/").allowed).toBe(true));
+  it("blocks unknown command", () => {
+    const r = checkAllowlist("evil_cmd --flag");
+    expect(r.allowed).toBe(false);
+    expect(r.prefix).toBe("evil_cmd");
+  });
+  it("blocks empty command", () => {
+    expect(checkAllowlist("").allowed).toBe(false);
+  });
+  it("blocks curl-evil (not in allowlist)", () => {
+    expect(checkAllowlist("curl_evil http://x.com").allowed).toBe(false);
+  });
+  it("allows curl (is in allowlist)", () => {
+    expect(checkAllowlist("curl http://x.com").allowed).toBe(true);
+  });
+});
+
+describe("checkPathTraversal", () => {
+  it("allows relative path", () => expect(checkPathTraversal("src/index.ts").safe).toBe(true));
+  it("allows absolute path", () => expect(checkPathTraversal("/home/user/project/file.ts").safe).toBe(true));
+  it("allows dot file", () => expect(checkPathTraversal(".gitignore").safe).toBe(true));
+  it("blocks ../", () => {
+    const r = checkPathTraversal("../../etc/passwd");
+    expect(r.safe).toBe(false);
+    expect(r.reason).toMatch(/traversal/);
+  });
+  it("blocks ..\\ on Windows", () => {
+    const r = checkPathTraversal("..\\..\\Windows\\System32");
+    expect(r.safe).toBe(false);
+    expect(r.reason).toMatch(/traversal/);
+  });
+  it("blocks encoded traversal", () => {
+    const r = checkPathTraversal("%2e%2e/etc/passwd");
+    expect(r.safe).toBe(false);
+    expect(r.reason).toMatch(/traversal/);
   });
 });
