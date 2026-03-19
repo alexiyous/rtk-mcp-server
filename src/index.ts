@@ -6,7 +6,7 @@ import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { runCommand, runFiltered, formatResult } from "./runner.js";
 import { getSummary, getHistory, getDailyBreakdown, recordBlocked } from "./tracking.js";
-import { validateArgs, checkAllowlist, checkPathTraversal } from "./guard.js";
+import { validateArgs, checkAllowlist, checkPathTraversal, sanitizeShellLiteral } from "./guard.js";
 import {
   detectAndFilter,
   filterGitStatus, filterGitLog, filterGitDiff, filterGitSimple,
@@ -276,13 +276,16 @@ Returns: Matches grouped by file with counts.`,
   },
   async ({ pattern, path, cwd }) => {
     const pt = checkPathTraversal(path); if (!pt.safe) return blocked(pt.reason!, path, 'rtk_grep');
-    let result = runCommand(`rg -n --with-filename "${pattern}" "${path}"`, cwd);
+    const safePattern = sanitizeShellLiteral(pattern);
+    const safePath = sanitizeShellLiteral(path);
+    let result = runCommand(`rg -n --with-filename "${safePattern}" "${safePath}"`, cwd);
     if (result.exitCode !== 0 || !result.stdout.trim()) {
-      result = runCommand(`grep -rn "${pattern}" "${path}"`, cwd);
+      result = runCommand(`grep -rn "${safePattern}" "${safePath}"`, cwd);
     }
     if ((result.exitCode !== 0 || !result.stdout.trim()) && process.platform === "win32") {
       const winPath = path.replace(/\//g, "\\");
-      result = runCommand(`findstr /rn "${pattern}" "${winPath}"`, cwd);
+      const safeWinPath = sanitizeShellLiteral(winPath);
+      result = runCommand(`findstr /rn "${safePattern}" "${safeWinPath}"`, cwd);
       // findstr single-file output is "linenum:content" — prepend filename so filterGrep parses it correctly
       if (result.stdout.trim() && /^\d+:/.test(result.stdout.trim().split("\n")[0])) {
         const basename = winPath.split("\\").pop() ?? winPath;

@@ -38,6 +38,7 @@ export function validateArgs(input: string): GuardResult {
     // Blocked patterns outside quotes
     if (ch === ";") return { safe: false, reason: "semicolon outside quotes — use separate tool calls instead of chaining commands" };
     if (ch === "&" && next === "&") return { safe: false, reason: "'&&' outside quotes — use separate tool calls instead of chaining commands" };
+    if (ch === "&" && next !== "&") return { safe: false, reason: "'&' outside quotes — cmd.exe command separator, use separate tool calls instead" };
     if (ch === "|" && next === "|") return { safe: false, reason: "'||' outside quotes — use separate tool calls instead of chaining commands" };
     if (ch === "|") return { safe: false, reason: "pipe operator outside quotes — use rtk_run with a single command, not a pipeline" };
     if (ch === "<" && next === "(") return { safe: false, reason: "process substitution '<(' not permitted in tool arguments" };
@@ -50,6 +51,16 @@ export function validateArgs(input: string): GuardResult {
   }
 
   return { safe: true };
+}
+
+// ─── Shell Literal Sanitizer ─────────────────────────────────────────────────
+// Escapes double-quote characters in values that are interpolated into
+// pre-quoted shell strings like `rg "${pattern}"`. A bare " would break out
+// of the surrounding quotes and allow command injection.
+// Uses "" (cmd.exe escape) which rg/grep also accept as a literal ".
+
+export function sanitizeShellLiteral(s: string): string {
+  return s.replace(/"/g, '""');
 }
 
 // ─── rtk_run Allowlist ───────────────────────────────────────────────────────

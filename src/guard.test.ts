@@ -1,6 +1,6 @@
 // src/guard.test.ts
 import { describe, it, expect } from "vitest";
-import { validateArgs, checkAllowlist, checkPathTraversal } from "./guard.js";
+import { validateArgs, checkAllowlist, checkPathTraversal, sanitizeShellLiteral } from "./guard.js";
 
 describe("validateArgs — safe inputs", () => {
   it("allows plain args", () => {
@@ -114,5 +114,32 @@ describe("checkPathTraversal", () => {
     const r = checkPathTraversal("%2e%2e/etc/passwd");
     expect(r.safe).toBe(false);
     expect(r.reason).toMatch(/traversal/);
+  });
+});
+
+describe("validateArgs — single & bypass (cmd.exe separator)", () => {
+  it("blocks single & outside quotes", () => {
+    const r = validateArgs("status & whoami");
+    expect(r.safe).toBe(false);
+    expect(r.reason).toMatch(/&/);
+  });
+  it("still blocks && outside quotes", () => {
+    const r = validateArgs("status && whoami");
+    expect(r.safe).toBe(false);
+  });
+  it("allows & inside double quotes", () => {
+    expect(validateArgs('log --format="%H&%s"').safe).toBe(true);
+  });
+});
+
+describe("sanitizeShellLiteral", () => {
+  it("escapes double quote to cmd.exe literal", () => {
+    expect(sanitizeShellLiteral('foo"bar')).toBe('foo""bar');
+  });
+  it("escapes injection attempt", () => {
+    expect(sanitizeShellLiteral('foo" | whoami & echo "')).toBe('foo"" | whoami & echo ""');
+  });
+  it("leaves safe strings unchanged", () => {
+    expect(sanitizeShellLiteral("foo|bar")).toBe("foo|bar");
   });
 });
